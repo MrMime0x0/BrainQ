@@ -1,0 +1,2071 @@
+// ===== Simple Brain v6 + Graphics Engine for GreyScript =====
+
+alphabet = "abcdefghijklmnopqrstuvwxyz"
+vowels = "aeiou"
+consonants = "bcdfghjklmnpqrstvwxyz"
+
+cmds = ["talk","say","feed","pet","play","scare","sleep","learn","heal","praise","scold","status","sing","buy","hack","rps"]
+K = cmds.len
+INW = K + 4
+speedMul = 1
+
+shopItems = {"apple": 5, "cake": 12, "medicine": 15, "ball": 20, "book": 25, "hat": 30, "bow": 30, "glasses": 35}
+shopInfo = {"apple": "food: hunger -25", "cake": "food: hunger -35, very happy", "medicine": "cures sickness", "ball": "toy: kills boredom (reusable)", "book": "+15 xp, more curious", "hat": "cosmetic", "bow": "cosmetic", "glasses": "cosmetic"}
+
+achTitles = {"word": "First Word", "smith": "Wordsmith", "friend": "Best Friends", "faint": "Heart Attack", "rich": "Rich Brain", "reader": "Mind Reader", "gamer": "Gamer", "hacker": "Elite Hacker", "adult": "Grown Up", "lvl5": "Level 5", "social": "Social Butterfly", "poet": "Inventor of Words", "dynasty": "Dynasty"}
+
+// ---------- helpers ----------
+pause = function(t)
+    wait(t * speedMul)
+end function
+
+sigmoid = function(x)
+    return 1 / (1 + 2.718281828 ^ (-x))
+end function
+
+randLetter = function(pool)
+    return pool[floor(rnd * pool.len)]
+end function
+
+clamp = function(v, lo, hi)
+    if v < lo then return lo
+    if v > hi then return hi
+    return v
+end function
+
+randomWord = function(size, pool)
+    s = ""
+    for i in range(1, size)
+        s = s + randLetter(pool)
+    end for
+    return s
+end function
+
+isWord = function(w)
+    if w.len == 0 then return false
+    for ch in w
+        if alphabet.indexOf(ch) == null then return false
+    end for
+    return true
+end function
+
+makeName = function()
+    n = ""
+    size = 4 + floor(rnd * 3)
+    for i in range(1, size)
+        if i % 2 == 1 then
+            n = n + randLetter(consonants)
+        else
+            n = n + randLetter(vowels)
+        end if
+    end for
+    return n[0].upper + n[1:]
+end function
+
+bump = function(m, k, n)
+    if m.hasIndex(k) then
+        m[k] = m[k] + n
+    else
+        m[k] = n
+    end if
+end function
+
+scrambleWord = function(w)
+    best = w
+    for attempt in range(1, 10)
+        letters = []
+        for ch in w
+            letters.push(ch)
+        end for
+        for i in range(letters.len - 1, 1)
+            j = floor(rnd * (i + 1))
+            t = letters[i]
+            letters[i] = letters[j]
+            letters[j] = t
+        end for
+        best = letters.join("")
+        if best != w then return best
+    end for
+    return best
+end function
+
+dumpMap = function(m)
+    out = []
+    for k in m.indexes
+        out.push(k + ":" + round(m[k], 3))
+    end for
+    return out.join("|")
+end function
+
+parseMap = function(s)
+    m = {}
+    if s == "" then return m
+    for pair in s.split("|")
+        kv = pair.split(":")
+        if kv.len == 2 then m[kv[0]] = kv[1].val
+    end for
+    return m
+end function
+
+getNum = function(d, key, dflt)
+    if d.hasIndex(key) and d[key] != "" then return d[key].val
+    return dflt
+end function
+
+getStr = function(d, key, dflt)
+    if d.hasIndex(key) then return d[key]
+    return dflt
+end function
+
+getList = function(d, key)
+    if d.hasIndex(key) and d[key] != "" then return d[key].split("|")
+    return []
+end function
+
+// ================= GRAPHICS ENGINE =================
+rawPrint = @print
+
+UI = {}
+UI.on = true
+UI.mode = "bubbles"
+UI.typing = true
+UI.width = 44
+UI.screenW = 76
+UI.rows = 18
+UI.log = []
+UI.name = ""
+
+themeNight = {"bot": "#1d3557", "botFg": "#e8f1ff", "me": "#2d6a4f", "meFg": "#eafff3", "acc": "#4cc9f0", "dim": "#6b7a90", "good": "#52e07a", "bad": "#ff6b6b", "warn": "#ffb703", "info": "#7aa2ff", "title": "#0b1d33"}
+themeMatrix = {"bot": "#0a2a12", "botFg": "#7dff9b", "me": "#003b1a", "meFg": "#b6ffcb", "acc": "#00ff66", "dim": "#2f7a45", "good": "#00ff66", "bad": "#ff3b3b", "warn": "#d6ff3b", "info": "#3bffd6", "title": "#021208"}
+themeSunset = {"bot": "#4a1d3d", "botFg": "#ffe6f0", "me": "#7a3b12", "meFg": "#fff1dc", "acc": "#ff9e6d", "dim": "#b58aa0", "good": "#9be564", "bad": "#ff5d73", "warn": "#ffd166", "info": "#c79bff", "title": "#2b0f26"}
+themeIce = {"bot": "#17324d", "botFg": "#eaf6ff", "me": "#1f5f7a", "meFg": "#e6fbff", "acc": "#8ee3ff", "dim": "#7f9fb5", "good": "#7dffd2", "bad": "#ff8fa3", "warn": "#ffe29a", "info": "#a6b8ff", "title": "#0a1a2b"}
+UI.themes = {"night": themeNight, "matrix": themeMatrix, "sunset": themeSunset, "ice": themeIce}
+UI.t = themeNight
+
+UI.pad = function(s, n)
+    if s.len >= n then return s
+    return s + " " * (n - s.len)
+end function
+
+UI.ltrim = function(s)
+    while s.len > 0 and s[0] == " "
+        s = s[1:]
+    end while
+    return s
+end function
+
+// removes rich-text tags like <color=#fff> but keeps things like "<3"
+UI.strip = function(s)
+    if s.len == 0 then return ""
+    out = ""
+    skip = false
+    for i in range(0, s.len - 1)
+        ch = s[i]
+        if skip then
+            if ch == ">" then skip = false
+        else if ch == "<" and i + 1 < s.len and ("abcdefghijklmnopqrstuvwxyz/").indexOf(s[i + 1]) != null then
+            skip = true
+        else
+            out = out + ch
+        end if
+    end for
+    return out
+end function
+
+UI.wrap = function(s, w)
+    lines = []
+    cur = ""
+    for word in s.split(" ")
+        if word == "" then continue
+        while word.len > w
+            if cur != "" then
+                lines.push(cur)
+                cur = ""
+            end if
+            lines.push(word[:w])
+            word = word[w:]
+        end while
+        if cur == "" then
+            cur = word
+        else if cur.len + 1 + word.len <= w then
+            cur = cur + " " + word
+        else
+            lines.push(cur)
+            cur = word
+        end if
+    end for
+    if cur != "" then lines.push(cur)
+    if lines.len == 0 then lines.push("")
+    return lines
+end function
+
+// print one line, remember it for 'cls' redraws
+UI.emit = function(s, rep)
+    UI.log.push(s)
+    if UI.log.len > 80 then UI.log.remove(0)
+    if rep then
+        rawPrint(s, true)
+    else
+        rawPrint(s)
+    end if
+end function
+
+UI.faceColor = function(face)
+    t = UI.t
+    if face.indexOf("^") != null then return t["good"]
+    if face.indexOf("x_x") != null or face.indexOf("O_O") != null then return t["bad"]
+    if face.indexOf(";") != null or face.indexOf("._.") != null then return t["info"]
+    if face.indexOf("-_-") != null then return t["dim"]
+    return t["acc"]
+end function
+
+// ---- chat bubble ----
+UI.bubble = function(label, lcol, body, meta, side, bg, fg, withTyping)
+    t = UI.t
+    lines = UI.wrap(body, UI.width)
+    inner = label.len
+    for l in lines
+        if l.len > inner then inner = l.len
+    end for
+    if meta.len > inner then inner = meta.len
+    ind = "  "
+    if side == "right" then
+        n = UI.screenW - inner - 4
+        if n < 0 then n = 0
+        ind = " " * n
+    end if
+    rows = []
+    if UI.mode == "bubbles" then
+        rows.push(ind + "<mark=" + bg + "cc> <color=" + lcol + "><b>" + UI.pad(label, inner) + "</b></color> </mark>")
+        for l in lines
+            rows.push(ind + "<mark=" + bg + "cc> <color=" + fg + ">" + UI.pad(l, inner) + "</color> </mark>")
+        end for
+        if meta != "" then rows.push(ind + "<mark=" + bg + "cc> <color=" + t["dim"] + ">" + UI.pad(meta, inner) + "</color> </mark>")
+    else
+        rows.push(ind + "<color=" + lcol + "><b>" + label + "</b></color>")
+        for l in lines
+            rows.push(ind + "<color=" + fg + ">  " + l + "</color>")
+        end for
+        if meta != "" then rows.push(ind + "<color=" + t["dim"] + ">  " + meta + "</color>")
+    end if
+    typed = false
+    if withTyping and UI.typing and UI.on then
+        rawPrint(ind + "<color=" + t["dim"] + "><i>" + label + " is typing...</i></color>")
+        wait(0.35 * speedMul)
+        typed = true
+    end if
+    for i in range(0, rows.len - 1)
+        UI.emit(rows[i], typed and i == 0)
+    end for
+end function
+
+UI.banner = function(txt, col)
+    UI.emit("<mark=" + col + "cc><color=#ffffff><b> " + UI.pad(txt, UI.screenW - 4) + "</b></color></mark>", false)
+end function
+
+UI.title = function(lt)
+    t = UI.t
+    txt = UI.ltrim(lt.replace("-", ""))
+    UI.emit("<mark=" + t["title"] + "ff><color=" + t["acc"] + "><b>  " + UI.pad(txt, UI.screenW - 6) + "</b></color></mark>", false)
+end function
+
+// ---- a line spoken by the brain ----
+UI.brainLine = function(lt)
+    t = UI.t
+    nm = UI.name
+    rest = lt[nm.len:]
+    label = nm
+    if rest.len > 0 and rest[0] == "[" then
+        e = rest.indexOf("]")
+        if e != null then
+            label = label + " " + rest[:e + 1]
+            rest = rest[e + 1:]
+        end if
+    end if
+    rest = UI.ltrim(rest)
+    speech = (rest.indexOf(":") != null) or (rest.indexOf("listens...") != null)
+    if not speech then
+        UI.emit("  <color=" + t["dim"] + "><i>* " + lt + " *</i></color>", false)
+        return
+    end if
+    face = ""
+    if rest.len > 0 and rest[0] == "(" then
+        e = rest.indexOf(")")
+        if e != null then
+            face = rest[:e + 1]
+            rest = rest[e + 1:]
+            if rest.len >= 3 and rest[:3] == "zzz" then
+                face = face + "zzz"
+                rest = rest[3:]
+            end if
+        end if
+    end if
+    rest = UI.ltrim(rest)
+    if rest.len > 0 and rest[0] == ":" then rest = UI.ltrim(rest[1:])
+    meta = ""
+    m = rest.indexOf("   [")
+    if m != null then
+        meta = rest[m + 3:]
+        rest = rest[:m]
+    end if
+    if rest == "" then rest = "..."
+    lcol = UI.faceColor(face)
+    UI.bubble(label + " " + face, lcol, rest, meta, "left", t["bot"], t["botFg"], true)
+end function
+
+// ---- decide how each printed line should look ----
+UI.route = function(s)
+    t = UI.t
+    plain = UI.strip(s)
+    lt = UI.ltrim(plain)
+    if lt == "" then
+        UI.emit("", false)
+        return
+    end if
+    if lt[:3] == "---" then
+        UI.title(lt)
+        return
+    end if
+    if plain.indexOf("FAINTS") != null or plain.indexOf("TRACE DETECTED") != null then
+        UI.banner(lt, t["bad"])
+        return
+    end if
+    if plain.indexOf("LEVEL UP") != null or plain.indexOf("ACHIEVEMENT") != null or plain.indexOf("QUEST COMPLETE") != null then
+        UI.banner(lt, t["warn"])
+        return
+    end if
+    if plain.indexOf("has grown into") != null or plain.indexOf(" is born!") != null then
+        UI.banner(lt, t["good"])
+        return
+    end if
+    if lt.len > 4 and (lt[:4] == "gen " or lt[:4] == "try ") then
+        UI.emit("  <color=#3fae5a>$ " + lt + "</color>", false)
+        return
+    end if
+    ai = plain.indexOf(" answers: ")
+    if ai != null then
+        UI.bubble(plain[:ai], t["warn"], plain[ai + 10:], "visitor", "left", t["bot"], t["botFg"], true)
+        return
+    end if
+    nm = UI.name
+    if nm != "" and lt.len > nm.len and lt[:nm.len] == nm then
+        UI.brainLine(lt)
+        return
+    end if
+    if lt[0] == "(" then
+        UI.emit("  <i>" + s + "</i>", false)
+        return
+    end if
+    UI.emit("<color=" + t["acc"] + ">|</color> " + s, false)
+end function
+
+// ---- replace print with the graphics router ----
+print = function(s, rep)
+    if not UI.on then
+        rawPrint(s)
+        return
+    end if
+    UI.route(str(s))
+end function
+
+// ---- HUD, header, prompt, echo ----
+UI.cell = function(v, goodHigh)
+    t = UI.t
+    v = clamp(v, 0, 100)
+    n = floor(v / 12.5)
+    score = v
+    if not goodHigh then score = 100 - v
+    col = t["good"]
+    if score < 30 then
+        col = t["bad"]
+    else if score < 60 then
+        col = t["warn"]
+    end if
+    return "<color=" + col + ">" + "#" * n + "</color><color=" + t["dim"] + ">" + "-" * (8 - n) + "</color>"
+end function
+
+UI.Header = function(b)
+    t = UI.t
+    sub = b.name + " - " + b.Stage() + " - generation " + b.gen + " - online"
+    rawPrint("<mark=" + t["title"] + "ff><color=" + t["acc"] + "><b>" + UI.pad(" BRAINCHAT", 14) + "</b></color><color=" + t["dim"] + ">" + UI.pad(sub, UI.screenW - 14) + "</color></mark>")
+end function
+
+UI.Hud = function(b)
+    if not UI.on then return
+    t = UI.t
+    rawPrint("<color=" + t["dim"] + ">" + "-" * UI.screenW + "</color>")
+    l1 = "<b><color=" + t["acc"] + ">" + b.Tag() + "</color></b> " + b.Face(b.happy) + "  <color=" + t["dim"] + ">LV" + b.level + "  " + b.coins + "c  d" + b.Day() + " " + b.Hour() + "h " + b.Phase() + "/" + b.weather + "</color>"
+    if b.sick then l1 = l1 + "  <color=" + t["bad"] + "><b>SICK</b></color>"
+    if b.visitor != null then l1 = l1 + "  <color=" + t["warn"] + ">visitor: " + b.visitor["name"] + " (greet)</color>"
+    rawPrint(l1)
+    l2 = "NRG " + UI.cell(b.energy, true) + " HAP " + UI.cell(b.happy * 100, true) + " HNG " + UI.cell(b.hunger, false) + " BOR " + UI.cell(b.boredom, false) + " BND " + UI.cell(b.bond, true) + " <color=" + t["bad"] + ">" + round(b.bpm) + "bpm</color>"
+    rawPrint(l2)
+end function
+
+UI.Prompt = function()
+    if not UI.on then return "> "
+    t = UI.t
+    return "<mark=" + t["me"] + "cc><color=" + t["meFg"] + "><b> you </b></color></mark> > "
+end function
+
+UI.Echo = function(txt)
+    if not UI.on then return
+    t = UI.t
+    UI.bubble("you", t["meFg"], txt, "", "right", t["me"], t["meFg"], false)
+end function
+
+UI.Redraw = function(b)
+    clear_screen()
+    UI.Header(b)
+    if UI.log.len == 0 then return
+    start = UI.log.len - UI.rows
+    if start < 0 then start = 0
+    for i in range(start, UI.log.len - 1)
+        rawPrint(UI.log[i])
+    end for
+end function
+// ================= END GRAPHICS ENGINE =================
+
+// ---------- Neuron ----------
+Neuron = {}
+Neuron.New = function(inputCount)
+    n = new Neuron
+    n.w = []
+    for i in range(1, inputCount)
+        n.w.push(rnd * 2 - 1)
+    end for
+    n.bias = rnd * 2 - 1
+    n.out = 0
+    n.delta = 0
+    return n
+end function
+
+Neuron.Think = function(inputs)
+    sum = self.bias
+    for i in range(0, inputs.len - 1)
+        sum = sum + self.w[i] * inputs[i]
+    end for
+    self.out = sigmoid(sum)
+    return self.out
+end function
+
+// ---------- Brain ----------
+Brain = {}
+Brain.New = function()
+    b = new Brain
+    b.hidden = []
+    for i in range(1, 3)
+        b.hidden.push(Neuron.New(2))
+    end for
+    b.output = Neuron.New(3)
+    b.hOut = []
+    // identity + personality
+    b.name = makeName()
+    b.curious = rnd
+    b.brave = rnd
+    b.social = rnd
+    // body and needs
+    b.bpm = 70
+    b.stress = 0
+    b.energy = 100
+    b.happy = 0.5
+    b.hunger = 0
+    b.boredom = 0
+    b.bond = 10
+    b.sick = false
+    b.sleeping = false
+    // life
+    b.age = 0
+    b.gen = 1
+    b.stageName = "baby"
+    b.words = []
+    b.lastTime = time
+    // world
+    b.weather = "sunny"
+    b.wTicks = 10
+    b.visitor = null
+    b.friends = {}
+    b.diary = []
+    // economy and progress
+    b.coins = 20
+    b.xp = 0
+    b.level = 1
+    b.inv = {"apple": 2}
+    b.equipped = ""
+    b.ach = []
+    b.quest = null
+    b.faints = 0
+    b.gamesPlayed = 0
+    b.hacks = 0
+    b.bestHack = 0
+    b.invented = 0
+    // ML 1: habit predictor
+    b.hw = []
+    b.hb = []
+    for j in range(0, K - 1)
+        row = []
+        for i in range(0, INW - 1)
+            row.push(0)
+        end for
+        b.hw.push(row)
+        b.hb.push(0)
+    end for
+    b.lastCmd = -1
+    b.lastX = []
+    b.lastP = []
+    b.guess = -1
+    b.guessConf = 0
+    b.mlSteps = 0
+    b.hits = 0
+    b.guesses = 0
+    // ML 2: word feelings
+    b.sent = {}
+    b.lastHeard = []
+    // ML 3: letter patterns (bigram language model)
+    b.bg = {}
+    b.bgTotal = 0
+    // ML 4: rock-paper-scissors move predictor
+    b.rpsM = [0,0,0,0,0,0,0,0,0]
+    b.rpsLast = -1
+    b.rpsWins = 0
+    b.rpsLoss = 0
+    return b
+end function
+
+// ---------- XOR core ----------
+Brain.Think = function(inputs)
+    h = []
+    for n in self.hidden
+        h.push(n.Think(inputs))
+    end for
+    self.hOut = h
+    return self.output.Think(h)
+end function
+
+Brain.Learn = function(inputs, target, rate)
+    out = self.Think(inputs)
+    self.output.delta = (target - out) * out * (1 - out)
+    for i in range(0, self.hidden.len - 1)
+        n = self.hidden[i]
+        n.delta = self.output.delta * self.output.w[i] * n.out * (1 - n.out)
+    end for
+    for i in range(0, self.output.w.len - 1)
+        self.output.w[i] = self.output.w[i] + rate * self.output.delta * self.hOut[i]
+    end for
+    self.output.bias = self.output.bias + rate * self.output.delta
+    for n in self.hidden
+        for i in range(0, 1)
+            n.w[i] = n.w[i] + rate * n.delta * inputs[i]
+        end for
+        n.bias = n.bias + rate * n.delta
+    end for
+end function
+
+// ---------- diary, xp, coins, achievements, quests ----------
+Brain.Day = function()
+    return floor(self.age / 24) + 1
+end function
+
+Brain.Hour = function()
+    return self.age % 24
+end function
+
+Brain.Phase = function()
+    h = self.Hour()
+    if h >= 22 or h < 6 then return "night"
+    if h < 12 then return "morning"
+    if h < 18 then return "day"
+    return "evening"
+end function
+
+Brain.Note = function(text)
+    self.diary.push("day " + self.Day() + ", " + self.Hour() + "h: " + text)
+    if self.diary.len > 15 then self.diary.remove(0)
+end function
+
+Brain.Tag = function()
+    if self.equipped == "" then return self.name
+    return self.name + "[" + self.equipped + "]"
+end function
+
+Brain.Gain = function(n)
+    self.xp = self.xp + n
+    while self.xp >= self.level * 40
+        self.xp = self.xp - self.level * 40
+        self.level = self.level + 1
+        self.coins = self.coins + 10
+        print("<color=#ffff44>*** LEVEL UP! " + self.name + " is now level " + self.level + " (+10 coins) ***</color>")
+        self.Note("reached level " + self.level)
+    end while
+end function
+
+Brain.Unlock = function(id, cond)
+    if not cond then return
+    if self.ach.indexOf(id) != null then return
+    self.ach.push(id)
+    self.coins = self.coins + 10
+    print("<color=#ffaa00>ACHIEVEMENT: " + achTitles[id] + " (+10 coins)</color>")
+    self.Note("achievement: " + achTitles[id])
+end function
+
+Brain.CheckAch = function()
+    self.Unlock("word", self.words.len >= 1)
+    self.Unlock("smith", self.words.len >= 8)
+    self.Unlock("friend", self.bond >= 90)
+    self.Unlock("faint", self.faints >= 1)
+    self.Unlock("rich", self.coins >= 100)
+    self.Unlock("reader", self.hits >= 10)
+    self.Unlock("gamer", self.gamesPlayed >= 6)
+    self.Unlock("hacker", self.hacks >= 3)
+    self.Unlock("adult", self.age >= 150)
+    self.Unlock("lvl5", self.level >= 5)
+    self.Unlock("social", self.friends.len >= 3)
+    self.Unlock("poet", self.invented >= 1)
+    self.Unlock("dynasty", self.gen >= 2)
+end function
+
+Brain.NewQuest = function()
+    opts = [["feed",2,10], ["pet",3,10], ["play",1,15], ["say",3,12], ["learn",1,20], ["sleep",1,15], ["sing",1,12], ["talk",2,8], ["game",2,18]]
+    o = opts[floor(rnd * opts.len)]
+    self.quest = {"cmd": o[0], "goal": o[1], "prog": 0, "reward": o[2]}
+end function
+
+Brain.QuestText = function()
+    if self.quest == null then return "no quest"
+    return "'" + self.quest["cmd"] + "' " + self.quest["prog"] + "/" + self.quest["goal"] + "  (reward " + self.quest["reward"] + " coins)"
+end function
+
+Brain.Quest = function(kind)
+    if self.quest == null then return
+    if self.quest["cmd"] != kind then return
+    self.quest["prog"] = self.quest["prog"] + 1
+    if self.quest["prog"] >= self.quest["goal"] then
+        print("<color=#44ff44>QUEST COMPLETE! +" + self.quest["reward"] + " coins</color>")
+        self.coins = self.coins + self.quest["reward"]
+        self.Gain(10)
+        self.Note("completed a quest")
+        self.NewQuest()
+        print("New quest: " + self.QuestText())
+    end if
+end function
+
+// ---------- ML 1: HABIT PREDICTOR ----------
+Brain.BuildInput = function()
+    x = []
+    for i in range(0, K - 1)
+        x.push(0)
+    end for
+    if self.lastCmd >= 0 then x[self.lastCmd] = 1
+    x.push(self.hunger / 100)
+    x.push(self.boredom / 100)
+    x.push((100 - self.energy) / 100)
+    if self.sick then
+        x.push(1)
+    else
+        x.push(0)
+    end if
+    return x
+end function
+
+Brain.Predict = function()
+    x = self.BuildInput()
+    z = []
+    top = -999
+    for j in range(0, K - 1)
+        s = self.hb[j]
+        for i in range(0, x.len - 1)
+            s = s + self.hw[j][i] * x[i]
+        end for
+        z.push(s)
+        if s > top then top = s
+    end for
+    total = 0
+    p = []
+    for j in range(0, K - 1)
+        e = 2.718281828 ^ (z[j] - top)
+        p.push(e)
+        total = total + e
+    end for
+    for j in range(0, K - 1)
+        p[j] = p[j] / total
+    end for
+    self.lastX = x
+    self.lastP = p
+    return p
+end function
+
+Brain.Anticipate = function()
+    p = self.Predict()
+    best = 0
+    for j in range(1, K - 1)
+        if p[j] > p[best] then best = j
+    end for
+    self.guess = best
+    self.guessConf = p[best]
+    if self.mlSteps >= 8 and p[best] > 0.4 then
+        print("<color=#aaaaff>(" + self.name + " expects you to '" + cmds[best] + "' - " + round(p[best] * 100) + "% sure)</color>")
+    end if
+end function
+
+Brain.Observe = function(actual)
+    if self.mlSteps >= 8 and self.guessConf > 0.4 then
+        self.guesses = self.guesses + 1
+        if self.guess == actual then
+            self.hits = self.hits + 1
+            self.bond = clamp(self.bond + 1, 0, 100)
+            print("<color=#44ff44>" + self.name + " guessed you right! (^o^)</color>")
+        end if
+    end if
+    lr = 0.4
+    for j in range(0, K - 1)
+        target = 0
+        if j == actual then target = 1
+        err = target - self.lastP[j]
+        self.hb[j] = self.hb[j] + lr * err
+        for i in range(0, self.lastX.len - 1)
+            self.hw[j][i] = self.hw[j][i] + lr * err * self.lastX[i]
+        end for
+    end for
+    self.lastCmd = actual
+    self.mlSteps = self.mlSteps + 1
+end function
+
+// ---------- ML 2: WORD FEELINGS ----------
+Brain.Feel = function(ws)
+    z = 0
+    for w in ws
+        if self.sent.hasIndex(w) then z = z + self.sent[w]
+    end for
+    return sigmoid(z)
+end function
+
+Brain.TrainFeel = function(label)
+    if self.lastHeard.len == 0 then return
+    p = self.Feel(self.lastHeard)
+    err = label - p
+    for w in self.lastHeard
+        if not self.sent.hasIndex(w) then self.sent[w] = 0
+        self.sent[w] = self.sent[w] + 1.5 * err
+    end for
+    print("<color=#aaaaff>(" + self.name + " updates how it feels about: " + self.lastHeard.join(" ") + ")</color>")
+    self.lastHeard = []
+end function
+
+// ---------- ML 3: LETTER PATTERNS ----------
+Brain.LearnLetters = function(w)
+    prev = "^"
+    for ch in w
+        bump(self.bg, prev + ch, 1)
+        prev = ch
+    end for
+    bump(self.bg, prev + "$", 1)
+    self.bgTotal = self.bgTotal + w.len + 1
+end function
+
+Brain.BigramWord = function(maxLen)
+    out = ""
+    prev = "^"
+    pool = alphabet + "$"
+    while out.len < maxLen
+        ws = []
+        total = 0
+        for ch in pool
+            wgt = 0.05
+            k = prev + ch
+            if self.bg.hasIndex(k) then wgt = wgt + self.bg[k]
+            ws.push(wgt)
+            total = total + wgt
+        end for
+        r = rnd * total
+        chosen = "$"
+        acc = 0
+        for i in range(0, pool.len - 1)
+            acc = acc + ws[i]
+            if r <= acc then
+                chosen = pool[i]
+                break
+            end if
+        end for
+        if chosen == "$" then break
+        out = out + chosen
+        prev = chosen
+    end while
+    if out.len < 2 then out = out + randLetter(vowels)
+    return out
+end function
+
+// ---------- life stages ----------
+Brain.Stage = function()
+    if self.age < 20 then return "baby"
+    if self.age < 60 then return "child"
+    if self.age < 150 then return "teen"
+    if self.age < 400 then return "adult"
+    return "elder"
+end function
+
+Brain.Scale = function()
+    s = self.Stage()
+    if s == "baby" then return 0.5
+    if s == "child" then return 0.75
+    if s == "teen" then return 0.9
+    return 1
+end function
+
+Brain.CheckStage = function()
+    st = self.Stage()
+    if st != self.stageName then
+        self.stageName = st
+        print("<color=#ffff44>*** " + self.name + " has grown into a " + st + "! ***</color>")
+        self.happy = clamp(self.happy + 0.2, 0, 1)
+        self.Note("grew into a " + st)
+    end if
+end function
+
+// ---------- heart ----------
+Brain.UpdateHeart = function()
+    target = 60 + self.stress * 100 + (100 - self.energy) * 0.15 + self.hunger * 0.08 - self.happy * 5 - self.bond * 0.05
+    if self.sick then target = target + 15
+    self.bpm = self.bpm + (target - self.bpm) * 0.5
+    self.bpm = clamp(self.bpm, 40, 200)
+    self.stress = self.stress * 0.7
+    if self.bpm >= 130 then
+        print("<color=#ff4444>!!! heart racing too fast... " + self.name + " FAINTS !!!</color>")
+        print("...flatline...")
+        pause(1)
+        print("...rebooting...")
+        self.bpm = 60
+        self.stress = 0
+        self.energy = clamp(self.energy - 15, 0, 100)
+        self.faints = self.faints + 1
+        self.Note("fainted from a racing heart")
+    end if
+end function
+
+Brain.Pulse = function()
+    shapes = ["/\", "/^\", "/\/\"]
+    flat = "_" * (2 + floor(rnd * 4))
+    return flat + shapes[floor(rnd * 3)] + "__"
+end function
+
+Brain.Beat = function(count)
+    for i in range(1, count)
+        if self.stress > 0.4 and rnd < 0.3 then
+            print("<color=#ffaa00>...skipped a beat...</color>")
+            pause(0.5)
+        end if
+        bpmNow = round(self.bpm + rnd * 4 - 2)
+        print("<color=#ff4444>lub-dub</color> " + self.Pulse() + "  " + bpmNow + " bpm")
+        pause(60 / self.bpm)
+    end for
+end function
+
+// ---------- mood and face ----------
+Brain.Mood = function()
+    a = 0
+    if self.bpm > 85 then a = 1
+    b = 0
+    if self.energy < 50 then b = 1
+    unsettled = self.Think([a, b])
+    m = self.happy * 0.5 + unsettled * 0.5 + (rnd * 0.2 - 0.1)
+    m = m - self.hunger * 0.002
+    if self.sick then m = m - 0.2
+    if self.weather == "sunny" then m = m + 0.05
+    if self.weather == "stormy" then m = m - 0.05
+    return clamp(m, 0, 1)
+end function
+
+Brain.MoodName = function(m)
+    if m < 0.2 then return "gloomy"
+    if m < 0.4 then return "calm"
+    if m < 0.6 then return "curious"
+    if m < 0.8 then return "happy"
+    return "excited"
+end function
+
+Brain.Face = function(mood)
+    if self.sleeping then return "(-_-)zzz"
+    if self.sick then return "(x_x)"
+    if self.bpm > 110 then return "(O_O)"
+    if rnd < 0.1 then return "(-_-)"
+    if mood < 0.2 then return "(;_;)"
+    if mood < 0.4 then return "(._.)"
+    if mood < 0.6 then return "(o_o)"
+    if mood < 0.8 then return "(^_^)"
+    return "(^o^)"
+end function
+
+// ---------- speech ----------
+Brain.Garble = function(w, amount)
+    out = ""
+    for ch in w
+        if rnd < amount then
+            out = out + randLetter(alphabet)
+        else
+            out = out + ch
+        end if
+    end for
+    return out
+end function
+
+Brain.Babble = function(mood)
+    trust = clamp(self.bgTotal / 250, 0, 0.85)
+    nw = 1 + floor(rnd * 2 + mood * 2 * self.Scale())
+    list1 = []
+    vowelChance = 0.25 + mood * 0.35
+    for i in range(1, nw)
+        if rnd < trust then
+            list1.push(self.BigramWord(3 + floor(rnd * 5 * self.Scale()) + 1))
+        else
+            sz = floor((2 + mood * 5 + rnd * 3) * self.Scale())
+            if sz < 2 then sz = 2
+            w = ""
+            for k in range(1, sz)
+                if rnd < vowelChance then
+                    w = w + randLetter(vowels)
+                else
+                    w = w + randLetter(consonants)
+                end if
+            end for
+            list1.push(w)
+        end if
+    end for
+    msg = list1.join(" ")
+    if self.words.len > 0 and self.Stage() != "baby" and rnd < 0.4 then
+        lw = self.words[floor(rnd * self.words.len)]
+        fog = (100 - self.energy) / 200
+        if self.sick then fog = fog + 0.15
+        msg = msg + " " + self.Garble(lw, fog)
+    end if
+    if mood > 0.7 then
+        msg = msg + "!"
+    else if mood < 0.3 then
+        msg = msg + "..."
+    else
+        msg = msg + "."
+    end if
+    return msg
+end function
+
+Brain.Speak = function()
+    if self.energy <= 0 then
+        print(self.name + " is too tired... zzz (try 'feed' or 'sleep')")
+        return
+    end if
+    mood = self.Mood()
+    print(self.Tag() + " " + self.Face(mood) + ": " + self.Babble(mood) + "   [" + self.MoodName(mood) + ", " + round(self.bpm) + " bpm]")
+    self.energy = clamp(self.energy - 3, 0, 100)
+    self.boredom = clamp(self.boredom - 8, 0, 100)
+end function
+
+Brain.Sing = function()
+    if self.energy < 10 then
+        print(self.name + " is too tired to sing.")
+        return
+    end if
+    print(self.Tag() + " starts to sing, keeping time with its heart:")
+    for i in range(1, 6)
+        syl = randLetter(consonants) + randLetter(vowels)
+        if self.bgTotal > 40 and rnd < 0.5 then syl = self.BigramWord(4)
+        print("  <color=#ffcc44>" + syl + "</color> " + ("*" * (1 + floor(rnd * 4))) + "  " + round(self.bpm) + " bpm")
+        pause(60 / self.bpm)
+        self.bpm = clamp(self.bpm + 1, 40, 200)
+    end for
+    print(self.name + " takes a bow.")
+    self.happy = clamp(self.happy + 0.15, 0, 1)
+    self.bond = clamp(self.bond + 2, 0, 100)
+    self.energy = clamp(self.energy - 8, 0, 100)
+    self.Gain(8)
+end function
+
+// ---------- hearing ----------
+Brain.Hear = function(text)
+    mood = self.Mood()
+    heardWords = []
+    for w in text.split(" ")
+        if isWord(w) and heardWords.indexOf(w) == null then heardWords.push(w)
+    end for
+    self.lastHeard = heardWords
+    self.boredom = clamp(self.boredom - 15, 0, 100)
+    self.bond = clamp(self.bond + 1 + self.social * 2, 0, 100)
+    for w in heardWords
+        self.LearnLetters(w)
+    end for
+    p = self.Feel(heardWords)
+    d = p - 0.5
+    self.happy = clamp(self.happy + d * 0.4, 0, 1)
+    if d < 0 then self.stress = clamp(self.stress - d * 1.6, 0, 1)
+    print(self.Tag() + " " + self.Face(mood) + " listens... " + self.Babble(mood))
+    known = false
+    for w in heardWords
+        if self.sent.hasIndex(w) then known = true
+    end for
+    if not known then
+        print("<color=#aaaaff>(" + self.name + " does not know these words yet. Use pet/praise or scare/scold to teach it.)</color>")
+    else if p > 0.6 then
+        print("<color=#44ff44>(feels warm about that: " + round(p * 100) + "%)</color>")
+    else if p < 0.4 then
+        print("<color=#ff8844>(feels uneasy about that: " + round(p * 100) + "%)</color>")
+    else
+        print("(unsure how to feel: " + round(p * 100) + "%)")
+    end if
+    newWord = null
+    for w in heardWords
+        if newWord == null and w.len >= 3 and w.len <= 8 and self.words.indexOf(w) == null and rnd < 0.2 + self.curious * 0.6 then
+            newWord = w
+        end if
+    end for
+    if newWord != null then
+        print(self.name + " tries to repeat it: " + self.Garble(newWord, 0.4))
+        self.words.push(newWord)
+        print("<color=#44ff44>" + self.name + " picked up a new word!</color>")
+        self.Note("picked up the word '" + newWord + "'")
+        self.happy = clamp(self.happy + 0.1, 0, 1)
+        self.Gain(5)
+    end if
+end function
+
+// ---------- learning words ----------
+Brain.Evolve = function(target)
+    current = randomWord(target.len, alphabet)
+    gen = 0
+    print("gen " + gen + ": " + current)
+    while current != target
+        gen = gen + 1
+        nxt = ""
+        for i in range(0, target.len - 1)
+            if current[i] == target[i] then
+                nxt = nxt + current[i]
+            else
+                nxt = nxt + randLetter(alphabet)
+            end if
+        end for
+        current = nxt
+        print("gen " + gen + ": " + current)
+        self.stress = clamp(self.stress + 0.02, 0, 1)
+        self.bpm = clamp(self.bpm + 1, 40, 200)
+    end while
+    print(self.name + " learned '" + target + "' in " + gen + " generations!")
+    if self.words.indexOf(target) == null then self.words.push(target)
+    self.LearnLetters(target)
+    self.Note("learned '" + target + "'")
+    self.energy = clamp(self.energy - 10, 0, 100)
+    self.happy = clamp(self.happy + 0.15, 0, 1)
+    self.Gain(10)
+end function
+
+Brain.Recall = function()
+    if self.words.len == 0 then
+        print("(nothing learned yet. try: learn hack)")
+        return
+    end if
+    w = self.words[floor(rnd * self.words.len)]
+    fog = (100 - self.energy) / 200
+    if self.sick then fog = fog + 0.15
+    print(self.name + " remembers... " + self.Garble(w, fog))
+end function
+
+// ---------- sleep ----------
+Brain.Sleep = function()
+    self.sleeping = true
+    self.bpm = 55
+    wasNight = (self.Phase() == "night")
+    print(self.Tag() + " " + self.Face(0.5) + " closes its eyes...")
+    while self.energy < 100
+        self.energy = clamp(self.energy + 20, 0, 100)
+        self.hunger = clamp(self.hunger + 4, 0, 100)
+        self.age = self.age + 1
+        dream = randomWord(4 + floor(rnd * 6), alphabet)
+        if self.bgTotal > 30 and rnd < 0.5 then dream = self.BigramWord(8)
+        if self.words.len > 0 and rnd < 0.5 then
+            dream = dream + " " + self.Garble(self.words[floor(rnd * self.words.len)], 0.3)
+        end if
+        if self.stress > 0.3 or rnd < 0.15 then
+            self.bpm = clamp(self.bpm + 25, 40, 200)
+            print("<color=#ff4444>~ NIGHTMARE: " + dream.upper + " ~</color>  " + round(self.bpm) + " bpm")
+        else
+            print("<color=#8888ff>~ dreaming: " + dream + " ~</color>  " + round(55 + rnd * 3) + " bpm")
+        end if
+        if self.bgTotal > 40 and rnd < 0.3 then
+            inv = self.BigramWord(7)
+            if inv.len >= 3 and self.words.indexOf(inv) == null then
+                self.words.push(inv)
+                self.invented = self.invented + 1
+                print("<color=#44ff44>   " + self.name + " invented a new word in its sleep: " + inv + "</color>")
+                self.Note("invented the word '" + inv + "' in a dream")
+            end if
+        end if
+        pause(0.6)
+    end while
+    self.sleeping = false
+    self.bpm = 60
+    self.stress = 0
+    self.happy = clamp(self.happy + 0.1, 0, 1)
+    if wasNight then
+        self.happy = clamp(self.happy + 0.1, 0, 1)
+        print("(a good night's sleep!)")
+    end if
+    self.CheckStage()
+    print(self.name + " wakes up refreshed.")
+end function
+
+// ---------- games ----------
+Brain.GameDone = function(coins, xp)
+    self.gamesPlayed = self.gamesPlayed + 1
+    self.coins = self.coins + coins
+    self.boredom = clamp(self.boredom - 30, 0, 100)
+    self.energy = clamp(self.energy - 8, 0, 100)
+    self.bond = clamp(self.bond + 2, 0, 100)
+    print("<color=#ffff44>(+" + coins + " coins)</color>")
+    self.Gain(xp)
+    self.Quest("game")
+end function
+
+Brain.Play = function()
+    secret = floor(rnd * 5) + 1
+    print(self.name + " hides a number from 1 to 5!")
+    g = user_input("your guess: ").val
+    if g == secret then
+        print(self.name + " (^o^): " + self.Babble(1))
+        print("You guessed it!")
+        self.happy = clamp(self.happy + 0.2, 0, 1)
+        self.GameDone(8, 8)
+    else
+        print(self.name + " giggles: " + randomWord(5, vowels + "h") + "  (it was " + secret + ")")
+        self.happy = clamp(self.happy + 0.1, 0, 1)
+        self.GameDone(2, 4)
+    end if
+end function
+
+Brain.RPS = function()
+    if self.energy < 10 then
+        print(self.name + " is too tired.")
+        return
+    end if
+    names = ["rock", "paper", "scissors"]
+    keys = ["r", "p", "s"]
+    print(self.name + " challenges you to rock-paper-scissors (5 rounds)!")
+    print("<color=#aaaaff>(it is learning which move you throw after which)</color>")
+    you = 0
+    me = 0
+    for rd in range(1, 5)
+        g = user_input("r / p / s > ").lower
+        y = keys.indexOf(g)
+        if y == null then
+            print("(skipped)")
+            continue
+        end if
+        pred = floor(rnd * 3)
+        if self.rpsLast >= 0 then
+            base = self.rpsLast * 3
+            best = 0
+            for j in range(1, 2)
+                if self.rpsM[base + j] > self.rpsM[base + best] then best = j
+            end for
+            if self.rpsM[base + best] > 0 then pred = best
+        end if
+        b = (pred + 1) % 3
+        if self.rpsLast >= 0 then self.rpsM[self.rpsLast * 3 + y] = self.rpsM[self.rpsLast * 3 + y] + 1
+        self.rpsLast = y
+        line = "you: " + names[y] + "   " + self.name + ": " + names[b]
+        if y == b then
+            print(line + "   (tie)")
+        else if y == (b + 1) % 3 then
+            print(line + "   <color=#44ff44>you win this round</color>")
+            you = you + 1
+            self.rpsWins = self.rpsWins + 1
+        else
+            print(line + "   <color=#ff8844>" + self.name + " wins this round</color>")
+            me = me + 1
+            self.rpsLoss = self.rpsLoss + 1
+        end if
+    end for
+    print("Final score  you " + you + " : " + me + " " + self.name)
+    if you > me then
+        self.happy = clamp(self.happy - 0.05, 0, 1)
+        self.GameDone(15, 10)
+    else if you == me then
+        self.GameDone(6, 6)
+    else
+        self.happy = clamp(self.happy + 0.15, 0, 1)
+        print(self.name + " does a victory dance!")
+        self.GameDone(3, 6)
+    end if
+end function
+
+Brain.Memory = function()
+    n = 3 + clamp(floor(self.level / 2), 0, 5)
+    seq = randomWord(n, "abcdefgh")
+    print(self.name + " shows you a secret code. Memorize it!")
+    print("<color=#ffff44>      " + seq + "</color>")
+    wait(1 + n * 0.5)
+    clear_screen()
+    g = user_input("what was the code? ").lower
+    if g == seq then
+        print("Perfect memory! The code was " + seq)
+        self.GameDone(10 + n, 10)
+    else
+        print("Nope. It was " + seq)
+        self.GameDone(2, 3)
+    end if
+end function
+
+Brain.Scramble = function()
+    if self.words.len == 0 then
+        print(self.name + " does not know any words yet. Teach it with 'learn <word>'.")
+        return
+    end if
+    w = self.words[floor(rnd * self.words.len)]
+    s = scrambleWord(w)
+    tries = 3
+    won = false
+    while tries > 0
+        g = user_input("unscramble '" + s + "' (" + tries + " tries, starts with " + w[0] + "): ").lower
+        if g == w then
+            won = true
+            break
+        end if
+        tries = tries - 1
+    end while
+    if won then
+        print(self.name + " cheers! (^o^)")
+        self.GameDone(6 + tries * 2, 8)
+    else
+        print("It was '" + w + "'.")
+        self.GameDone(1, 3)
+    end if
+end function
+
+// "hack" a firewall: the brain evolves the password with random letters
+Brain.Hack = function()
+    if self.energy < 15 then
+        print(self.name + " is too tired to hack. Feed it or let it sleep.")
+        return
+    end if
+    size = 3 + clamp(floor(self.level / 3), 0, 3)
+    pw = randomWord(size, alphabet)
+    print("<color=#ff8844>Target: firewall 10.0." + floor(rnd * 255) + "." + floor(rnd * 255) + "  (" + size + "-letter password)</color>")
+    print(self.name + " starts cracking...")
+    cur = randomWord(size, alphabet)
+    g = 0
+    traced = false
+    while cur != pw
+        g = g + 1
+        nxt = ""
+        for i in range(0, size - 1)
+            if cur[i] == pw[i] then
+                nxt = nxt + cur[i]
+            else
+                nxt = nxt + randLetter(alphabet)
+            end if
+        end for
+        cur = nxt
+        print("  try " + g + ": " + cur)
+        pause(0.08)
+        if g == 15 and rnd < 0.3 then
+            print("<color=#ff4444>!! TRACE DETECTED !!</color>")
+            self.stress = clamp(self.stress + 0.5, 0, 1)
+            self.bpm = clamp(self.bpm + 20, 40, 200)
+            traced = true
+        end if
+    end while
+    print("<color=#44ff44>ACCESS GRANTED in " + g + " tries!</color>")
+    self.hacks = self.hacks + 1
+    if self.bestHack == 0 or g < self.bestHack then
+        self.bestHack = g
+        print("(new personal best!)")
+    end if
+    reward = clamp(90 - g, 8, 60) + self.level
+    if traced then reward = floor(reward / 2)
+    self.energy = clamp(self.energy - 7, 0, 100)
+    self.stress = clamp(self.stress + 0.15, 0, 1)
+    self.Note("cracked a firewall in " + g + " tries")
+    self.GameDone(reward, 14)
+end function
+
+// ---------- shop and items ----------
+Brain.Has = function(item)
+    return self.inv.hasIndex(item) and self.inv[item] > 0
+end function
+
+Brain.Shop = function()
+    print("--- shop (you have " + self.coins + " coins) ---")
+    for k in shopItems.indexes
+        print("  " + k + "  " + shopItems[k] + "c   " + shopInfo[k])
+    end for
+    print("buy <item>")
+end function
+
+Brain.Buy = function(item)
+    if not shopItems.hasIndex(item) then
+        print("No such item. Type 'shop'.")
+        return
+    end if
+    if self.coins < shopItems[item] then
+        print("Not enough coins. Play games, hack, or finish quests to earn more.")
+        return
+    end if
+    self.coins = self.coins - shopItems[item]
+    bump(self.inv, item, 1)
+    print("Bought " + item + " for " + shopItems[item] + " coins.")
+end function
+
+Brain.Inventory = function()
+    print("--- inventory (" + self.coins + " coins) ---")
+    shown = 0
+    for k in self.inv.indexes
+        if self.inv[k] > 0 then
+            print("  " + k + " x" + self.inv[k])
+            shown = shown + 1
+        end if
+    end for
+    if shown == 0 then print("  (empty)")
+    if self.equipped != "" then print("wearing: " + self.equipped)
+end function
+
+Brain.Use = function(item)
+    if not self.Has(item) then
+        print("You do not have '" + item + "'. Try 'inv' or 'shop'.")
+        return
+    end if
+    if item == "apple" then
+        self.hunger = clamp(self.hunger - 25, 0, 100)
+        self.happy = clamp(self.happy + 0.05, 0, 1)
+        self.inv[item] = self.inv[item] - 1
+        print(self.name + " crunches the apple.")
+        self.Quest("feed")
+    else if item == "cake" then
+        self.hunger = clamp(self.hunger - 35, 0, 100)
+        self.happy = clamp(self.happy + 0.2, 0, 1)
+        self.inv[item] = self.inv[item] - 1
+        print(self.name + " devours the cake! (^o^)")
+        self.Quest("feed")
+    else if item == "medicine" then
+        if not self.sick then
+            print(self.name + " is not sick.")
+        else
+            self.sick = false
+            self.inv[item] = self.inv[item] - 1
+            print(self.name + " takes the medicine. Feeling better!")
+        end if
+    else if item == "ball" then
+        self.boredom = clamp(self.boredom - 40, 0, 100)
+        self.happy = clamp(self.happy + 0.15, 0, 1)
+        self.bond = clamp(self.bond + 3, 0, 100)
+        print(self.name + " chases the ball around the screen.")
+    else if item == "book" then
+        self.inv[item] = self.inv[item] - 1
+        self.curious = clamp(self.curious + 0.05, 0, 1)
+        print(self.name + " flips through the book, looking clever.")
+        self.Gain(15)
+    else
+        if self.equipped == item then
+            self.equipped = ""
+            print(self.name + " takes off the " + item + ".")
+        else
+            self.equipped = item
+            print(self.name + " puts on the " + item + ". Stylish!")
+            self.happy = clamp(self.happy + 0.1, 0, 1)
+        end if
+    end if
+end function
+
+// ---------- world: weather, visitors ----------
+Brain.WeatherTick = function(silent)
+    self.wTicks = self.wTicks - 1
+    if self.wTicks <= 0 then
+        opts = ["sunny", "sunny", "cloudy", "rainy", "stormy", "snowy"]
+        self.weather = opts[floor(rnd * opts.len)]
+        self.wTicks = 8 + floor(rnd * 8)
+        if not silent then print("<color=#88ccff>The weather turns " + self.weather + ".</color>")
+    end if
+    if self.weather == "sunny" then self.happy = clamp(self.happy + 0.01, 0, 1)
+    if self.weather == "rainy" then self.boredom = clamp(self.boredom + 2, 0, 100)
+    if self.weather == "snowy" then self.hunger = clamp(self.hunger + 1, 0, 100)
+    if self.weather == "stormy" and self.brave < 0.6 and rnd < 0.3 then
+        print(self.name + " flinches at the thunder!")
+        self.stress = clamp(self.stress + 0.4, 0, 1)
+    end if
+end function
+
+Brain.ShowWeather = function()
+    print("It is day " + self.Day() + ", " + self.Hour() + ":00 (" + self.Phase() + "), weather: " + self.weather)
+end function
+
+Brain.Visit = function()
+    if self.visitor != null then return
+    if rnd > 0.06 then return
+    self.visitor = {"name": makeName(), "ttl": 4, "word": randomWord(4 + floor(rnd * 3), alphabet)}
+    print("<color=#ffaa44>A wild " + self.visitor["name"] + " appears and stares at " + self.name + "! (type 'greet')</color>")
+end function
+
+Brain.Greet = function()
+    if self.visitor == null then
+        print("There is nobody here to greet.")
+        return
+    end if
+    v = self.visitor
+    delta = 1 + floor(self.social * 3)
+    bump(self.friends, v["name"], delta)
+    print(self.Tag() + " waves at " + v["name"] + " and babbles: " + self.Babble(0.8))
+    print(v["name"] + " answers: " + self.Garble(v["word"], 0.2))
+    if self.words.indexOf(v["word"]) == null and rnd < 0.5 + self.curious * 0.4 then
+        self.words.push(v["word"])
+        self.LearnLetters(v["word"])
+        print("<color=#44ff44>" + self.name + " learned '" + v["word"] + "' from its new friend!</color>")
+        self.Note("learned '" + v["word"] + "' from " + v["name"])
+    end if
+    self.happy = clamp(self.happy + 0.15, 0, 1)
+    self.boredom = clamp(self.boredom - 25, 0, 100)
+    self.Note("befriended " + v["name"])
+    self.Gain(8)
+    self.visitor = null
+end function
+
+Brain.Friends = function()
+    if self.friends.len == 0 then
+        print("No friends yet. Visitors show up now and then. Type 'greet' when one arrives.")
+        return
+    end if
+    print("--- " + self.name + "'s friends ---")
+    for k in self.friends.indexes
+        print("  " + k + "  " + ("<3 " * self.friends[k]))
+    end for
+end function
+
+// ---------- events ----------
+Brain.Event = function()
+    r = rnd
+    ph = self.Phase()
+    if self.sick and r < 0.5 then
+        print(self.name + " coughs. *cough* *cough*")
+    else if self.hunger > 70 and r < 0.5 then
+        print("*grrrowl* " + self.name + "'s tummy rumbles.")
+    else if self.energy < 20 and r < 0.5 then
+        print(self.name + " yawns... " + randomWord(3, "zu"))
+    else if self.boredom > 70 and r < 0.5 then
+        print(self.name + " stares at you and babbles: " + self.Babble(0.4))
+    else if ph == "night" and r < 0.2 then
+        print(self.name + " gazes at the stars... " + randomWord(3, "oau") + "...")
+    else if self.weather == "rainy" and r < 0.2 then
+        print(self.name + " watches the raindrops: " + randomWord(4, alphabet))
+    else if self.weather == "sunny" and r < 0.15 then
+        print(self.name + " basks in the sunshine. (^_^)")
+    else if r < 0.10 then
+        print(self.name + " thinks: <color=#aaaaff>" + randomWord(3 + floor(rnd * 5), alphabet) + "...</color>")
+    else if r < 0.17 then
+        print(self.name + " hiccups. *hic!*")
+        self.bpm = clamp(self.bpm + 8, 40, 200)
+    else if r < 0.23 then
+        print(self.name + " blinks slowly.")
+    else if r < 0.28 and self.words.len > 0 then
+        print(self.name + " mutters to itself: " + self.Garble(self.words[floor(rnd * self.words.len)], 0.2))
+    else if r < 0.32 and self.brave > 0.5 then
+        print(self.name + " bravely explores the terminal.")
+        self.boredom = clamp(self.boredom - 10, 0, 100)
+        if rnd < 0.3 then
+            found = 1 + floor(rnd * 4)
+            self.coins = self.coins + found
+            print("<color=#ffff44>...and finds " + found + " coins!</color>")
+        end if
+    end if
+    self.Visit()
+end function
+
+// ---------- tick ----------
+Brain.Tick = function(silent)
+    self.age = self.age + 1
+    self.CheckStage()
+    self.energy = clamp(self.energy - 2, 0, 100)
+    if self.Phase() == "night" then self.energy = clamp(self.energy - 1, 0, 100)
+    self.hunger = clamp(self.hunger + 3, 0, 100)
+    self.boredom = clamp(self.boredom + 4 - self.curious * 2, 0, 100)
+    self.happy = self.happy + (0.5 - self.happy) * 0.05
+    if self.hunger > 80 then self.happy = clamp(self.happy - 0.05, 0, 1)
+    if self.boredom > 80 then self.bond = clamp(self.bond - 1, 0, 100)
+    if self.sick then self.happy = clamp(self.happy - 0.03, 0, 1)
+    if not self.sick and (self.hunger > 90 or self.stress > 0.9) and rnd < 0.3 then
+        self.sick = true
+        print("<color=#ffaa00>" + self.name + " is not feeling well... (try 'heal' or 'use medicine')</color>")
+        self.Note("fell sick")
+    end if
+    self.WeatherTick(silent)
+    if self.visitor != null then
+        self.visitor["ttl"] = self.visitor["ttl"] - 1
+        if self.visitor["ttl"] <= 0 then
+            print(self.visitor["name"] + " wanders away.")
+            self.visitor = null
+        end if
+    end if
+    self.UpdateHeart()
+    if not silent then self.Event()
+end function
+
+Brain.Away = function(dt)
+    n = floor(dt / 20)
+    if n > 15 then n = 15
+    for i in range(1, n)
+        self.Tick(true)
+    end for
+    print("<color=#aaaaaa>(" + round(dt) + "s passed while you were away...)</color>")
+    if self.hunger > 70 then print(self.name + " got hungry waiting for you.")
+    if self.boredom > 70 then print(self.name + " got bored and lonely.")
+    if self.energy < 30 then print(self.name + " is sleepy.")
+    mood = self.Mood()
+    if self.bond > 50 then
+        print(self.Tag() + " " + self.Face(mood) + " lights up: " + self.Babble(0.9) + " <3")
+    else
+        print(self.Tag() + " " + self.Face(mood) + " glances at you: " + self.Babble(mood))
+    end if
+    self.Note("waited alone for " + round(dt) + "s")
+end function
+
+Brain.Live = function(moments)
+    print("Watching " + self.name + " live for " + moments + " moments...")
+    breath = ["in ", "out"]
+    for i in range(1, moments)
+        self.Tick(false)
+        print(self.Face(self.Mood()) + " breathe " + breath[i % 2] + " " + self.Pulse() + " " + round(self.bpm) + " bpm")
+        pause(60 / self.bpm + 0.5)
+    end for
+end function
+
+Brain.Heal = function()
+    if not self.sick then
+        print(self.name + " is perfectly healthy.")
+        return
+    end if
+    self.sick = false
+    self.energy = clamp(self.energy - 5, 0, 100)
+    self.hunger = clamp(self.hunger - 20, 0, 100)
+    print(self.name + " takes the medicine and makes a funny face. Feeling better!")
+end function
+
+// ---------- generations ----------
+Brain.Legacy = function()
+    if self.age < 150 or self.bond < 50 then
+        print(self.name + " must be at least a teen (age 150) with bond 50+ to start a legacy.")
+        return
+    end if
+    ans = user_input("Retire " + self.name + " and hatch its child? It keeps 3 words and half its mind. (y/n) ").lower
+    if ans != "y" then return
+    old = self.name
+    self.curious = clamp(self.curious + rnd * 0.3 - 0.15, 0.05, 1)
+    self.brave = clamp(self.brave + rnd * 0.3 - 0.15, 0.05, 1)
+    self.social = clamp(self.social + rnd * 0.3 - 0.15, 0.05, 1)
+    kept = []
+    for w in self.words
+        if kept.len < 3 then kept.push(w)
+    end for
+    self.words = kept
+    for j in range(0, K - 1)
+        self.hb[j] = self.hb[j] * 0.5
+        for i in range(0, INW - 1)
+            self.hw[j][i] = self.hw[j][i] * 0.5
+        end for
+    end for
+    for w in self.sent.indexes
+        self.sent[w] = self.sent[w] * 0.5
+    end for
+    self.gen = self.gen + 1
+    self.name = makeName()
+    UI.name = self.name
+    self.age = 0
+    self.stageName = "baby"
+    self.hunger = 0
+    self.boredom = 0
+    self.energy = 100
+    self.stress = 0
+    self.happy = 0.7
+    self.bond = 20
+    self.sick = false
+    self.bpm = 70
+    self.equipped = ""
+    self.diary = []
+    self.Note("born to " + old + " (generation " + self.gen + ")")
+    self.Hatch(true)
+end function
+
+// ---------- info screens ----------
+Brain.Bar = function(v)
+    n = floor(v / 10)
+    s = "["
+    for i in range(1, 10)
+        if i <= n then
+            s = s + "#"
+        else
+            s = s + "-"
+        end if
+    end for
+    return s + "]"
+end function
+
+Brain.Status = function()
+    print("--- " + self.Tag() + " (" + self.Stage() + ", generation " + self.gen + ") ---")
+    print("level    : " + self.level + "  xp " + self.xp + "/" + (self.level * 40) + "   coins " + self.coins)
+    print("time     : day " + self.Day() + ", " + self.Hour() + ":00 (" + self.Phase() + "), " + self.weather)
+    print("heart    : " + round(self.bpm) + " bpm")
+    print("energy   : " + self.Bar(self.energy) + " " + round(self.energy))
+    print("happy    : " + self.Bar(self.happy * 100) + " " + round(self.happy * 100))
+    print("hunger   : " + self.Bar(self.hunger) + " " + round(self.hunger))
+    print("boredom  : " + self.Bar(self.boredom) + " " + round(self.boredom))
+    print("bond     : " + self.Bar(self.bond) + " " + round(self.bond))
+    print("curious  : " + self.Bar(self.curious * 100))
+    print("brave    : " + self.Bar(self.brave * 100))
+    print("social   : " + self.Bar(self.social * 100))
+    if self.sick then print("health   : SICK")
+    print("words    : " + self.words.len + " " + self.words)
+    print("friends  : " + self.friends.len + "   achievements: " + self.ach.len + "/" + achTitles.len)
+    print("quest    : " + self.QuestText())
+end function
+
+Brain.Mind = function()
+    print("--- " + self.name + "'s mind ---")
+    acc = "n/a"
+    if self.guesses > 0 then acc = round(self.hits / self.guesses * 100) + "%"
+    print("1) habit model: " + self.mlSteps + " observations, guessed right " + self.hits + "/" + self.guesses + " (" + acc + ")")
+    p = self.Predict()
+    items = []
+    for j in range(0, K - 1)
+        items.push({"name": cmds[j], "v": p[j]})
+    end for
+    items.sort("v")
+    print("   expects you to do next:")
+    for i in range(1, 3)
+        it = items[items.len - i]
+        print("   " + it.name + " " + self.Bar(it.v * 100) + " " + round(it.v * 100) + "%")
+    end for
+    print("2) feelings model: " + self.sent.len + " words judged")
+    if self.sent.len > 0 then
+        fl = []
+        for w in self.sent.indexes
+            fl.push({"name": w, "v": self.sent[w]})
+        end for
+        fl.sort("v")
+        low = fl[0]
+        high = fl[fl.len - 1]
+        if low.v < 0 then print("   dislikes most: <color=#ff8844>" + low.name + "</color> " + round(low.v, 2))
+        if high.v > 0 then print("   likes most   : <color=#44ff44>" + high.name + "</color> +" + round(high.v, 2))
+    end if
+    print("3) letter model: " + self.bgTotal + " letters studied, language trust " + round(clamp(self.bgTotal / 250, 0, 0.85) * 100) + "%")
+    if self.bg.len > 0 then
+        bl = []
+        for k in self.bg.indexes
+            bl.push({"name": k, "v": self.bg[k]})
+        end for
+        bl.sort("v")
+        out = []
+        for i in range(1, 5)
+            if bl.len - i >= 0 then out.push(bl[bl.len - i].name + "(" + bl[bl.len - i].v + ")")
+        end for
+        print("   favourite letter pairs (^ start, $ end): " + out.join("  "))
+    end if
+    print("4) rock-paper-scissors: you won " + self.rpsWins + " rounds, it won " + self.rpsLoss)
+    print("   sample babble from the letter model: " + self.BigramWord(8))
+end function
+
+Brain.Diary = function()
+    if self.diary.len == 0 then
+        print("The diary is empty.")
+        return
+    end if
+    print("--- " + self.name + "'s diary ---")
+    for line in self.diary
+        print("  " + line)
+    end for
+end function
+
+Brain.Achievements = function()
+    print("--- achievements " + self.ach.len + "/" + achTitles.len + " ---")
+    for k in achTitles.indexes
+        if self.ach.indexOf(k) != null then
+            print("  <color=#ffaa00>[x] " + achTitles[k] + "</color>")
+        else
+            print("  [ ] " + achTitles[k])
+        end if
+    end for
+end function
+
+// ---------- save / load ----------
+Brain.SaveExists = function()
+    return get_shell.host_computer.File(home_dir + "/brain.sav") != null
+end function
+
+Brain.Save = function(quiet)
+    comp = get_shell.host_computer
+    if comp.File(home_dir + "/brain.sav") == null then comp.touch(home_dir, "brain.sav")
+    f = comp.File(home_dir + "/brain.sav")
+    sickFlag = 0
+    if self.sick then sickFlag = 1
+    flat = []
+    for j in range(0, K - 1)
+        flat.push(round(self.hb[j], 3))
+    end for
+    for j in range(0, K - 1)
+        for i in range(0, INW - 1)
+            flat.push(round(self.hw[j][i], 3))
+        end for
+    end for
+    q = ""
+    if self.quest != null then q = [self.quest["cmd"], self.quest["goal"], self.quest["prog"], self.quest["reward"]].join(":")
+    stats = [self.lastCmd, self.mlSteps, self.hits, self.guesses, self.faints, self.gamesPlayed, self.hacks, self.bestHack, self.invented, self.rpsWins, self.rpsLoss, self.bgTotal, self.rpsLast, self.coins, self.xp, self.level, self.gen]
+    recs = ["V6"]
+    recs.push("name=" + self.name)
+    recs.push("curious=" + round(self.curious, 3))
+    recs.push("brave=" + round(self.brave, 3))
+    recs.push("social=" + round(self.social, 3))
+    recs.push("bond=" + round(self.bond, 2))
+    recs.push("happy=" + round(self.happy, 3))
+    recs.push("hunger=" + round(self.hunger, 2))
+    recs.push("energy=" + round(self.energy, 2))
+    recs.push("age=" + self.age)
+    recs.push("sick=" + sickFlag)
+    recs.push("words=" + self.words.join("|"))
+    recs.push("equipped=" + self.equipped)
+    recs.push("inv=" + dumpMap(self.inv))
+    recs.push("ach=" + self.ach.join("|"))
+    recs.push("friends=" + dumpMap(self.friends))
+    recs.push("quest=" + q)
+    recs.push("stats=" + stats.join("|"))
+    recs.push("rps=" + self.rpsM.join("|"))
+    recs.push("weights=" + flat.join("|"))
+    recs.push("sent=" + dumpMap(self.sent))
+    recs.push("bg=" + dumpMap(self.bg))
+    f.set_content(recs.join("#"))
+    if not quiet then print("Saved " + self.name + " (body, mind, items, friends) to " + home_dir + "/brain.sav")
+end function
+
+Brain.Load = function()
+    f = get_shell.host_computer.File(home_dir + "/brain.sav")
+    if f == null then return false
+    recs = f.get_content.split("#")
+    if recs[0] != "V6" then return false
+    d = {}
+    for i in range(1, recs.len - 1)
+        r = recs[i]
+        pos = r.indexOf("=")
+        if pos != null then d[r[:pos]] = r[pos + 1:]
+    end for
+    self.name = getStr(d, "name", self.name)
+    self.curious = getNum(d, "curious", 0.5)
+    self.brave = getNum(d, "brave", 0.5)
+    self.social = getNum(d, "social", 0.5)
+    self.bond = getNum(d, "bond", 10)
+    self.happy = getNum(d, "happy", 0.5)
+    self.hunger = getNum(d, "hunger", 0)
+    self.energy = getNum(d, "energy", 100)
+    self.age = getNum(d, "age", 0)
+    self.sick = (getNum(d, "sick", 0) == 1)
+    self.words = getList(d, "words")
+    self.equipped = getStr(d, "equipped", "")
+    self.inv = parseMap(getStr(d, "inv", ""))
+    self.ach = getList(d, "ach")
+    self.friends = parseMap(getStr(d, "friends", ""))
+    self.sent = parseMap(getStr(d, "sent", ""))
+    self.bg = parseMap(getStr(d, "bg", ""))
+    qs = getStr(d, "quest", "")
+    self.quest = null
+    if qs != "" then
+        qp = qs.split(":")
+        if qp.len == 4 then self.quest = {"cmd": qp[0], "goal": qp[1].val, "prog": qp[2].val, "reward": qp[3].val}
+    end if
+    st = getList(d, "stats")
+    if st.len >= 17 then
+        self.lastCmd = st[0].val
+        self.mlSteps = st[1].val
+        self.hits = st[2].val
+        self.guesses = st[3].val
+        self.faints = st[4].val
+        self.gamesPlayed = st[5].val
+        self.hacks = st[6].val
+        self.bestHack = st[7].val
+        self.invented = st[8].val
+        self.rpsWins = st[9].val
+        self.rpsLoss = st[10].val
+        self.bgTotal = st[11].val
+        self.rpsLast = st[12].val
+        self.coins = st[13].val
+        self.xp = st[14].val
+        self.level = st[15].val
+        self.gen = st[16].val
+    end if
+    rp = getList(d, "rps")
+    if rp.len == 9 then
+        for i in range(0, 8)
+            self.rpsM[i] = rp[i].val
+        end for
+    end if
+    flat = getList(d, "weights")
+    if flat.len == K + K * INW then
+        idx = 0
+        for j in range(0, K - 1)
+            self.hb[j] = flat[idx].val
+            idx = idx + 1
+        end for
+        for j in range(0, K - 1)
+            for i in range(0, INW - 1)
+                self.hw[j][i] = flat[idx].val
+                idx = idx + 1
+            end for
+        end for
+    end if
+    self.stageName = self.Stage()
+    self.lastTime = time
+    return true
+end function
+
+// ---------- birth ----------
+Brain.Hatch = function(inherited)
+    print("An egg made of random letters appears...")
+    for i in range(1, 4)
+        print("   " + randomWord(10, alphabet))
+        pause(0.4)
+    end for
+    print("...crack!...")
+    pause(0.6)
+    print("<color=#ffff44>" + self.name + " is born!</color>")
+    print("curious " + self.Bar(self.curious * 100) + "  brave " + self.Bar(self.brave * 100) + "  social " + self.Bar(self.social * 100))
+    if inherited then
+        print("It inherited a faint memory of its parent's mind. (generation " + self.gen + ")")
+    else
+        print("Its ML mind is empty. It will learn your habits, your words and your letters.")
+        print("You start with 20 coins and 2 apples. Type 'quest' for your first job.")
+    end if
+    self.Beat(3)
+end function
+
+// ===== Train the XOR core =====
+brain = Brain.New()
+data = [[0,0], [0,1], [1,0], [1,1]]
+answers = [0, 1, 1, 0]
+
+rawPrint("Growing a brain...")
+for epoch in range(1, 10000)
+    for i in range(0, 3)
+        brain.Learn(data[i], answers[i], 0.8)
+    end for
+end for
+
+ans = ""
+if brain.SaveExists() then ans = user_input("A saved brain was found. Wake it up? (y/n) ").lower
+loaded = false
+if ans == "y" then loaded = brain.Load()
+UI.name = brain.name
+clear_screen()
+UI.Header(brain)
+if ans == "y" and not loaded then print("(that save is from an older version and cannot be loaded, hatching a new one)")
+if loaded then
+    print(brain.name + " opens its eyes. It remembers you.")
+    brain.Beat(2)
+else
+    brain.NewQuest()
+    brain.Hatch(false)
+end if
+if brain.quest == null then brain.NewQuest()
+brain.lastTime = time
+print("Type 'help' for commands. Anything else you type, " + brain.name + " will hear.")
+
+// ===== Main loop =====
+while true
+    now = time
+    if now - brain.lastTime > 20 then brain.Away(now - brain.lastTime)
+
+    UI.name = brain.name
+    brain.Anticipate()
+    UI.Hud(brain)
+    cmd = user_input(UI.Prompt()).lower
+    if cmd != "" then UI.Echo(cmd)
+    parts = cmd.split(" ")
+    c = parts[0]
+    tickAfter = true
+    used = ""
+    if cmds.indexOf(c) != null then used = c
+
+    if c == "quit" then
+        brain.Save(false)
+        print("Goodbye. " + brain.name + " waves a tiny pixel hand.")
+        exit
+    end if
+
+    if c == "help" then
+        print("CARE    : feed | pet | praise | scold | scare | heal | sleep")
+        print("TALK    : talk | say <text> | sing | greet | recall | rename <name>")
+        print("GAMES   : play | rps | memory | scramble | hack")
+        print("SHOP    : shop | buy <item> | inv | use <item> | wear <item>")
+        print("INFO    : status | mind | diary | quest | ach | weather | friends")
+        print("WATCH   : beat | monitor | live")
+        print("LOOK    : theme <night|matrix|sunset|ice> | style <bubbles|simple> | typing | cls | gfx")
+        print("OTHER   : learn <word> | legacy | fast | save | quit")
+        tickAfter = false
+    else if c == "talk" then
+        for i in range(1, 3)
+            brain.Speak()
+        end for
+        brain.Quest("talk")
+    else if c == "say" and cmd.len > 4 then
+        brain.Hear(cmd[4:])
+        brain.Quest("say")
+    else if c == "sing" then
+        brain.Sing()
+        brain.Quest("sing")
+    else if c == "greet" then
+        brain.Greet()
+    else if c == "rename" and parts.len > 1 then
+        if isWord(parts[1]) and parts[1].len <= 10 then
+            brain.name = parts[1][0].upper + parts[1][1:]
+            UI.name = brain.name
+            print("It will now answer to " + brain.name + ".")
+        else
+            print("Letters a-z only, up to 10 long.")
+        end if
+        tickAfter = false
+    else if c == "beat" then
+        brain.Beat(4)
+    else if c == "monitor" then
+        brain.Beat(10)
+    else if c == "live" then
+        brain.Live(15)
+        tickAfter = false
+    else if c == "status" then
+        brain.Status()
+        tickAfter = false
+    else if c == "mind" then
+        brain.Mind()
+        tickAfter = false
+    else if c == "diary" then
+        brain.Diary()
+        tickAfter = false
+    else if c == "quest" then
+        print("Quest: " + brain.QuestText())
+        tickAfter = false
+    else if c == "ach" then
+        brain.Achievements()
+        tickAfter = false
+    else if c == "weather" then
+        brain.ShowWeather()
+        tickAfter = false
+    else if c == "friends" then
+        brain.Friends()
+        tickAfter = false
+    else if c == "shop" then
+        brain.Shop()
+        tickAfter = false
+    else if c == "inv" then
+        brain.Inventory()
+        tickAfter = false
+    else if c == "buy" and parts.len > 1 then
+        brain.Buy(parts[1])
+        tickAfter = false
+    else if (c == "use" or c == "wear") and parts.len > 1 then
+        brain.Use(parts[1])
+    else if c == "theme" then
+        if parts.len > 1 and UI.themes.hasIndex(parts[1]) then
+            UI.t = UI.themes[parts[1]]
+            print("Theme set to " + parts[1] + ".")
+        else
+            print("Themes: " + UI.themes.indexes.join(" "))
+        end if
+        tickAfter = false
+    else if c == "style" then
+        if parts.len > 1 and (parts[1] == "bubbles" or parts[1] == "simple") then
+            UI.mode = parts[1]
+            print("Style: " + parts[1])
+        else
+            print("style bubbles | style simple")
+        end if
+        tickAfter = false
+    else if c == "typing" then
+        UI.typing = not UI.typing
+        print("Typing indicator: " + UI.typing)
+        tickAfter = false
+    else if c == "cls" then
+        UI.Redraw(brain)
+        tickAfter = false
+    else if c == "gfx" then
+        UI.on = not UI.on
+        rawPrint("Graphics: " + UI.on)
+        tickAfter = false
+    else if c == "fast" then
+        if speedMul == 1 then
+            globals.speedMul = 0.15
+            print("Fast mode ON (animations are quicker).")
+        else
+            globals.speedMul = 1
+            print("Fast mode OFF.")
+        end if
+        tickAfter = false
+    else if c == "save" then
+        brain.Save(false)
+        tickAfter = false
+    else if c == "legacy" then
+        brain.Legacy()
+        tickAfter = false
+    else if c == "pet" then
+        brain.happy = clamp(brain.happy + 0.2, 0, 1)
+        brain.stress = clamp(brain.stress - 0.3, 0, 1)
+        brain.bond = clamp(brain.bond + 4, 0, 100)
+        brain.boredom = clamp(brain.boredom - 10, 0, 100)
+        print(brain.Tag() + " purrs in binary. *beep boop*")
+        brain.TrainFeel(1)
+        brain.Quest("pet")
+    else if c == "praise" then
+        brain.happy = clamp(brain.happy + 0.1, 0, 1)
+        brain.bond = clamp(brain.bond + 2, 0, 100)
+        print(brain.name + " glows with pride.")
+        brain.TrainFeel(1)
+    else if c == "scold" then
+        brain.stress = clamp(brain.stress + 0.3, 0, 1)
+        brain.happy = clamp(brain.happy - 0.1, 0, 1)
+        brain.bond = clamp(brain.bond - 1, 0, 100)
+        print(brain.name + " droops sadly.")
+        brain.TrainFeel(0)
+    else if c == "scare" then
+        brain.stress = clamp(brain.stress + 0.9 - brain.brave * 0.4, 0, 1)
+        brain.happy = clamp(brain.happy - 0.2, 0, 1)
+        brain.bond = clamp(brain.bond - 3, 0, 100)
+        print("BOO! The heart jumps!")
+        brain.TrainFeel(0)
+    else if c == "feed" then
+        brain.hunger = clamp(brain.hunger - 30, 0, 100)
+        brain.energy = clamp(brain.energy + 20, 0, 100)
+        brain.happy = clamp(brain.happy + 0.08, 0, 1)
+        print("Nom nom. " + brain.name + " munches happily. (items from the shop are better!)")
+        brain.Quest("feed")
+    else if c == "play" then
+        brain.Play()
+        brain.TrainFeel(1)
+        brain.Quest("play")
+    else if c == "rps" then
+        brain.RPS()
+    else if c == "memory" then
+        brain.Memory()
+    else if c == "scramble" then
+        brain.Scramble()
+    else if c == "hack" then
+        brain.Hack()
+    else if c == "heal" then
+        brain.Heal()
+    else if c == "sleep" then
+        brain.Sleep()
+        brain.Quest("sleep")
+    else if c == "recall" then
+        brain.Recall()
+    else if c == "learn" and parts.len > 1 then
+        word = parts[1]
+        if isWord(word) and word.len <= 12 then
+            brain.Evolve(word)
+            brain.Quest("learn")
+        else
+            print("Letters a-z only, up to 12 long.")
+        end if
+    else
+        brain.Hear(cmd)
+        brain.Quest("say")
+        used = "say"
+    end if
+
+    if used != "" then brain.Observe(cmds.indexOf(used))
+    brain.CheckAch()
+    if tickAfter then brain.Tick(false)
+    if tickAfter and brain.age % 25 == 0 then brain.Save(true)
+    brain.lastTime = time
+end while
